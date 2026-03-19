@@ -1,0 +1,21 @@
+A few things worth flagging for future iterations, roughly in order of impact:
+Game state adjustments
+
+Foul situation — shots taken in the bonus or with a defender in foul trouble are worth more (free throws added to the possession value)
+Score differential / game clock — a team down 10 with 2 minutes left takes lower quality shots out of necessity, inflating their xP relative to actual efficiency
+Timeout just called — coming out of a timeout the offense runs a set play, which tends to produce slightly higher quality looks
+
+Possession context
+
+Second chance shots — offensive rebound putbacks are already flagged in your play classifications (is_second_chance), these tend to be higher % than the location alone suggests
+Fast break — also already flagged (is_fast_break), transition shots are meaningfully more efficient than half-court offense, especially at the rim
+Off turnover — also flagged (is_off_turnover), similar to fast break
+
+Shooter context
+
+Assisted vs. unassisted — catch-and-shoot jumpers are more efficient than off-the-dribble, already flagged with is_assist
+Fatigue — shot quality degrades late in halves and for players with heavy minutes, harder to model but real
+
+The good news is most of these are already captured in your play classification flags — is_fast_break, is_second_chance, is_off_turnover, is_assist are all there. They just aren't being fed into the xP formula yet. So when you're ready to add them it's mostly multipliers on top of the existing structure rather than new data collection.
+The defender adjustment you mentioned will probably be the hardest — stats.ncaa doesn't track defensive assignments so that would require either a separate data source or inference from play patterns.
+What are the canvas dimensions?

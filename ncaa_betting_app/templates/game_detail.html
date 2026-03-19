@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Game Detail</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+</head>
+<body>
+    <header class="top-bar">
+        <div class="top-bar__left">
+            <a href="/" class="back-link">← Back</a>
+            <h1 class="logo" id="matchup-title">Loading...</h1>
+        </div>
+        <div class="top-bar__right">
+            <span id="game-clock" class="game-clock-large"></span>
+            <div id="timeout-badge" class="timeout-badge hidden">TIMEOUT</div>
+            <button class="btn btn--refresh" onclick="manualRefresh()">↻ Refresh</button>
+        </div>
+    </header>
+
+    <main class="detail-layout">
+        <!-- Score Header -->
+        <section class="score-header" id="score-header">
+            <div class="score-header__team">
+                <span class="team-name" id="team-a-name">--</span>
+                <span class="score-big" id="team-a-score">0</span>
+                <span class="score-expected" id="team-a-expected">Exp: 0</span>
+            </div>
+            <div class="score-header__center">
+                <div class="half-info" id="half-info">1st Half</div>
+                <div class="odds-info" id="odds-info"></div>
+                <div class="h1-scores" id="h1-scores"></div>
+            </div>
+            <div class="score-header__team">
+                <span class="team-name" id="team-b-name">--</span>
+                <span class="score-big" id="team-b-score">0</span>
+                <span class="score-expected" id="team-b-expected">Exp: 0</span>
+            </div>
+        </section>
+
+        <!-- Alerts Banner -->
+        <section class="alerts-banner" id="alerts-banner"></section>
+
+        <!-- Charts Row -->
+        <section class="charts-row">
+            <div class="chart-card">
+                <h3>Total Combined Points</h3>
+                <canvas id="total-points-chart"></canvas>
+            </div>
+            <div class="chart-card">
+                <h3>Score Difference (<span id="diff-label">A - B</span>)</h3>
+                <canvas id="diff-chart"></canvas>
+            </div>
+        </section>
+
+        <!-- Box Score -->
+        <section class="box-score-section">
+            <h2>Box Score</h2>
+            <div class="box-score-tabs">
+                <button class="tab active" data-tab="total" onclick="switchBoxTab(this)">Total</button>
+                <button class="tab" data-tab="h1" onclick="switchBoxTab(this)">1st Half</button>
+                <button class="tab" data-tab="h2" onclick="switchBoxTab(this)">2nd Half</button>
+            </div>
+            <div class="box-score-tables">
+                <div id="box-team-a"></div>
+                <div id="box-team-b"></div>
+            </div>
+        </section>
+
+        <!-- Shot Breakdown -->
+        <section class="shot-breakdown-section">
+            <h2>Shot Breakdown</h2>
+            <div class="shot-breakdown-tabs">
+                <button class="tab active" data-tab="total" onclick="switchShotTab(this)">Total</button>
+                <button class="tab" data-tab="h1" onclick="switchShotTab(this)">1st Half</button>
+                <button class="tab" data-tab="h2" onclick="switchShotTab(this)">2nd Half</button>
+            </div>
+            <div class="shot-tables" id="shot-tables"></div>
+        </section>
+
+        <!-- Insights Panel -->
+        <section class="insights-panel">
+            <h2>Betting Insights</h2>
+            <div id="insights-content"></div>
+        </section>
+    </main>
+
+    <script>
+        const GAME_ID = "{{ game_id }}";
+    </script>
+    <script src="/static/js/game_detail.js"></script>
+</body>
+</html>

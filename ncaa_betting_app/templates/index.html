@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NCAAB Live Dashboard</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <header class="top-bar">
+        <div class="top-bar__left">
+            <h1 class="logo">NCAAB <span class="logo__accent">LIVE</span></h1>
+        </div>
+        <div class="top-bar__right">
+            <span id="status-indicator" class="status-dot status-dot--inactive"></span>
+            <span id="status-text" class="status-text">Connecting...</span>
+            <span id="last-refresh" class="last-refresh"></span>
+            <button id="refresh-btn" class="btn btn--refresh" onclick="manualRefresh()">
+                ↻ Refresh
+            </button>
+        </div>
+    </header>
+
+    <main class="scoreboard" id="scoreboard">
+        <div class="loading" id="loading">
+            <div class="loading__spinner"></div>
+            <p>Loading games...</p>
+        </div>
+    </main>
+
+    <script src="/static/js/scoreboard.js?v=2"></script>
+</body>
+</html>
