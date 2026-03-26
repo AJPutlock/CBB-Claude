@@ -35,6 +35,7 @@ try:
         calculate_expected_points,
         _normalize_time,
     )
+    from models.player_stats import PlayerStatsLookup
 except ImportError as e:
     print(f"[!] Import error: {e}")
     print("Make sure you're running from the project root.")
@@ -79,7 +80,6 @@ def get_players(conn, game_id):
     ).fetchall()
     return {str(r['player_id']): r for r in rows}
 
-
 def main():
     game_id = sys.argv[1] if len(sys.argv) > 1 else None
 
@@ -100,6 +100,19 @@ def main():
 
     team_a = game['team_a_name'] or 'Team A'
     team_b = game['team_b_name'] or 'Team B'
+
+    # Load player shooting stats for shooter-adjusted xP
+    # Convert sqlite3.Row objects to plain dicts so .get() works correctly
+    try:
+        _pstats_lookup = PlayerStatsLookup()
+        players_list   = [dict(p) for p in players.values()]
+        players_stats  = _pstats_lookup.build_game_stats(players_list)
+        matched = len(players_stats)
+        total   = len(players_list)
+        print(f"Player stats loaded: {matched}/{total} players matched")
+    except Exception as e:
+        print(f"[!] Player stats load failed: {e}")
+        players_stats = {}
 
     print(f"\nApp xP Debug: {team_a} vs {team_b}")
     print(f"Game ID: {game_id}  |  Status: {game['status']}")
@@ -136,8 +149,9 @@ def main():
 
     print(f"\n{'#':>4}  {'Team':<18}  {'Half':>4}  {'Time':>6}  "
           f"{'PBP Type':<12}  {'Coord Type':<12}  {'Final Type':<12}  "
-          f"{'x':>5}  {'y':>5}  {'Dist':>6}  {'Clock':<6}  {'xP':>6}  Player")
-    print("-" * 145)
+          f"{'x':>5}  {'y':>5}  {'Dist':>6}  {'Clock':<6}  "
+          f"{'Lg Avg':>7}  {'Plyr Base':>10}  {'Coord Adj':>10}  {'Coord Δ':>8}  {'Total Δ':>8}  Player")
+    print("-" * 185)
 
     shot_num = 0
     for play in plays:
@@ -183,8 +197,23 @@ def main():
         # Clock phase
         clock_phase = classify_shot_clock(possession_start, elapsed)
 
-        # xP
-        xp = calculate_expected_points(final_type, x_pct, y_pct, None, clock_phase)
+        # xP breakdown — 5 values:
+        #   league_avg  : flat league average, no coords, no player stats
+        #   player_base : player's own pct * point value, no coords
+        #   coord_adj   : player pct anchored to coord zone (final value app uses)
+        #   coord_delta : coord_adj - player_base (coordinate contribution)
+        #   total_delta : coord_adj - league_avg  (full adjustment)
+        p_stats     = players_stats.get(player_id)
+        # League avg and player base use 'early' clock so they show pure
+        # percentage values without shot clock penalty — for comparison only.
+        # The coord_adj and app xP include the actual shot clock multiplier.
+        xp_league   = calculate_expected_points(final_type, None,  None,  None,    'early')
+        xp_player   = calculate_expected_points(final_type, None,  None,  p_stats, 'early')
+        xp_coord    = calculate_expected_points(final_type, x_pct, y_pct, p_stats, clock_phase)
+        xp          = xp_coord  # app uses coord-adjusted value
+
+        coord_delta = xp_coord - xp_player
+        total_delta = xp_coord - xp_league
 
         team_xp[team_id] += xp
         if is_ft:
@@ -209,9 +238,21 @@ def main():
         # Flag if final_type differs from pbp_type (means coord/description changed it)
         type_flag = '*' if final_type != pbp_type else ' '
 
+        # Only show player/coord deltas for shot types where adjustment applies
+        # AND player stats were found — suppress all deltas if no player stats
+        applies    = final_type in ('three', 'ft')
+        has_coords = x_pct is not None
+        has_stats  = p_stats is not None
+
+        plyr_str   = f"{xp_player:.3f}" if (has_stats and applies) else "   —"
+        coord_str  = f"{xp_coord:.3f}"  if (has_stats and applies and has_coords) else "   —"
+        cdelta_str = f"{coord_delta:+.3f}" if (has_stats and applies and has_coords) else "   —"
+        tdelta_str = f"{total_delta:+.3f}" if (has_stats and applies) else "   —"
+
         print(f"{shot_num:>4}  {team_str:<18}  {half:>4}  {time_norm:>6}  "
               f"{pbp_type:<12}  {coord_type_str:<12}  {final_type+type_flag:<12}  "
-              f"{x_str:>5}  {y_str:>5}  {dist_str:>6}  {clock_phase:<6}  {xp:>6.3f}  {pname}")
+              f"{x_str:>5}  {y_str:>5}  {dist_str:>6}  {clock_phase:<6}  "
+              f"{xp_league:>7.3f}  {plyr_str:>10}  {coord_str:>10}  {cdelta_str:>8}  {tdelta_str:>8}  {pname}")
 
         # Update possession tracking
         if play.get('is_turnover') or play.get('is_def_rebound') or is_shot:
@@ -221,8 +262,31 @@ def main():
     print("\n" + "=" * 130)
     print("TEAM TOTALS (exactly as shown in app)")
     print("=" * 130)
-    print(f"\n  {'Team':<25}  {'FGM-FGA':>8}  {'FTM-FTA':>8}  {'Total xP':>9}  {'Actual':>7}")
-    print(f"  {'-'*65}")
+    # Recompute base totals for comparison
+    team_xp_base = {}
+    for play in plays:
+        tid = play.get('team_id', '')
+        if not (tid and (play.get('is_made_shot') or play.get('is_missed_shot'))):
+            continue
+        pbp_t  = classify_shot_type_from_play(play)
+        pid    = str(play.get('player_id') or '')
+        half   = int(play.get('half', 1))
+        tnorm  = _normalize_time(play.get('time', ''))
+        res    = 1 if play.get('is_made_shot') else 0
+        coords = shot_coords.get((half, tnorm, pid, res))
+        x2, y2 = (coords[0], coords[1]) if coords else (None, None)
+        ct     = coords[2] if coords else None
+        ft2 = pbp_t
+        if pbp_t not in ('ft', 'three'):
+            if ct in ('dunk', 'hook', 'layup', 'rim'):
+                ft2 = ct
+            elif pbp_t == 'midrange' and ct:
+                ft2 = ct
+        cl = classify_shot_clock(None, play.get('elapsed_seconds', 0))
+        team_xp_base[tid] = team_xp_base.get(tid, 0.0) + calculate_expected_points(ft2, x2, y2, None, cl)
+
+    print(f"\n  {'Team':<25}  {'FGM-FGA':>8}  {'FTM-FTA':>8}  {'Base xP':>9}  {'Adj xP':>8}  {'Diff':>6}  {'Actual':>7}")
+    print(f"  {'-'*80}")
 
     for tid, xp in sorted(team_xp.items()):
         name   = team_name_map.get(str(tid), f"Team {tid}")[:25]
@@ -236,8 +300,10 @@ def main():
             actual = game['team_a_score']
         elif (game['team_b_name'] or '').strip() == name.strip():
             actual = game['team_b_score']
+        base_xp = team_xp_base.get(tid, 0.0)
+        diff    = xp - base_xp
         print(f"  {name:<25}  {fgm:>3}-{fga:<4}  {ftm:>3}-{fta:<4}  "
-              f"{xp:>9.1f}  {str(actual):>7}")
+              f"{base_xp:>9.1f}  {xp:>8.1f}  {diff:>+6.1f}  {str(actual):>7}")
 
     print(f"\n  * = coord/description type overrode PBP type")
     print(f"  Total shot plays processed: {shot_num}")

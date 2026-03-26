@@ -36,6 +36,7 @@ from models.expected_points import (
     calculate_game_expected_score, calculate_h1_expected_score,
     classify_shot_type_from_play, classify_shot_clock
 )
+from models.player_stats import PlayerStatsLookup
 from models.insights import generate_insights
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,7 @@ class GameManager:
         self._lock = threading.Lock()
         self._game_ids = []
         self._last_pregame_odds_time = 0
+        self._pstats_lookup = PlayerStatsLookup()
 
     # ---- Auto-refresh loop ----
 
@@ -349,13 +351,15 @@ class GameManager:
             live_odds = get_game_odds(gid, live=True)
 
             # Expected scores
-            expected = calculate_game_expected_score(plays, shots)
+            players_stats = self._pstats_lookup.build_game_stats(players)
+            logger.warning(f"Game {gid}: player stats matched {len(players_stats)}/{len(players)} players — stats keys sample: {list(players_stats.keys())[:3]}")
+            expected = calculate_game_expected_score(plays, shots, players_stats)
 
             # H1 expected scores (for games in 2nd half)
             h1_expected = {}
             current_half = game.get('half', 1)
             if current_half >= 2:
-                h1_expected = calculate_h1_expected_score(plays)
+                h1_expected = calculate_h1_expected_score(plays, shots, players_stats)
 
             # Insights
             insights = generate_insights(plays, players, game, shots)
@@ -423,8 +427,9 @@ class GameManager:
         score_timeline = _build_score_timeline(plays, team_a_id, team_b_id)
         shot_breakdown = _build_shot_breakdown(plays, team_a_id, team_b_id)
 
-        expected = calculate_game_expected_score(plays, shots)
-        h1_expected = calculate_h1_expected_score(plays)
+        players_stats = self._pstats_lookup.build_game_stats(players)
+        expected = calculate_game_expected_score(plays, shots, players_stats)
+        h1_expected = calculate_h1_expected_score(plays, shots, players_stats)
 
         insights = generate_insights(plays, players, game, shots)
 

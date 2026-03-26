@@ -126,10 +126,10 @@ def calculate_expected_points(
     if shot_type == 'dunk':
         return round(2 * LEAGUE_AVG['dunk_pct'], 3)  # 1.96
 
-    # ── Free throw: fixed, no location adjustment ─────────────────────────────
+    # ── Free throw: use player's projected FT% directly ─────────────────────
     if shot_type == 'ft':
-        shooter_mult = _shooter_mult_ft(player_stats)
-        return round(LEAGUE_AVG['ft_pct'] * shooter_mult, 3)
+        ft_pct = (player_stats.get('ft_pct') if player_stats else None) or LEAGUE_AVG['ft_pct']
+        return round(ft_pct, 3)
 
     # ── Coordinate-based shots ────────────────────────────────────────────────
     if x_pct is not None and y_pct is not None:
@@ -140,7 +140,22 @@ def calculate_expected_points(
     base_pct  = _base_pct(shot_type, dist_ft, angle_deg)
     point_val = 3 if shot_type == 'three' else 2
 
-    shooter_mult = _shooter_mult(shot_type, player_stats)
+    if shot_type == 'three' and player_stats and player_stats.get('fg3_pct'):
+        # Use player's fg3_pct directly as the base make%.
+        # When coordinates exist, scale by the zone ratio so corner/wing/deep
+        # threes adjust relative to the player's own average (not league avg).
+        # When no coordinates, use fg3_pct flat — no zone ratio applied.
+        if dist_ft is not None:
+            league_avg_3pt = (LEAGUE_AVG['three_corner_pct'] + LEAGUE_AVG['three_above_break_pct']) / 2
+            zone_ratio = base_pct / league_avg_3pt if league_avg_3pt > 0 else 1.0
+            effective_pct = player_stats['fg3_pct'] * zone_ratio
+        else:
+            effective_pct = player_stats['fg3_pct']  # flat: just the player's rate
+        shooter_mult = 1.0  # baked into effective_pct
+        base_pct = effective_pct
+    else:
+        shooter_mult = _shooter_mult(shot_type, player_stats)
+
     clock_mult   = SHOT_CLOCK_MULT.get(shot_clock_phase, 1.0)
     ctx_mult     = _context_mult(context_flags)
 
@@ -231,6 +246,8 @@ def calculate_game_expected_score(plays, shots=None, players_stats=None):
     """
     if players_stats is None:
         players_stats = {}
+    # Normalize all keys to strings
+    players_stats = {str(k): v for k, v in players_stats.items()}
 
     # Build coordinate lookup keyed by (half, time_norm, player_id, result)
     # Stores (x, y, shot_type) so coordinate-derived shot type takes priority
@@ -279,7 +296,7 @@ def calculate_game_expected_score(plays, shots=None, players_stats=None):
                 if shot_type in ('ft', 'three'):
                     pass  # PBP always authoritative for these
                 elif coord_shot_type in ('dunk', 'hook', 'layup', 'rim'):
-                    shot_type = coord_shot_type  # description is more specific
+                    shot_type = coord_shot_type  # shot chart description is more specific
                 elif shot_type == 'midrange' and coord_shot_type:
                     shot_type = coord_shot_type  # geometry fills in rim vs mid
             else:
@@ -287,7 +304,7 @@ def calculate_game_expected_score(plays, shots=None, players_stats=None):
 
 
             clock_phase  = classify_shot_clock(possession_start_elapsed, elapsed)
-            p_stats      = players_stats.get(play.get('player_id'))
+            p_stats      = players_stats.get(str(play.get('player_id') or ''))
             ctx_flags    = _extract_context_flags(play)
 
             xp = calculate_expected_points(

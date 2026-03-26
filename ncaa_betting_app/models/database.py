@@ -79,7 +79,7 @@ _SHOT_INSERT_COLS = [
 
 # Pre-compile SQL strings once at module load
 _PLAY_INSERT_SQL = (
-    f"INSERT INTO plays ({', '.join(_PLAY_INSERT_COLS)}) "
+    f"INSERT OR IGNORE INTO plays ({', '.join(_PLAY_INSERT_COLS)}) "
     f"VALUES ({', '.join(['?'] * len(_PLAY_INSERT_COLS))})"
 )
 
@@ -120,11 +120,12 @@ def init_db():
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS players (
-            player_id TEXT PRIMARY KEY,
+            player_id TEXT NOT NULL,
             game_id TEXT NOT NULL,
             team_name TEXT NOT NULL,
             team_id TEXT NOT NULL,
             player_name TEXT NOT NULL,
+            PRIMARY KEY (player_id, game_id),
             FOREIGN KEY (game_id) REFERENCES games(game_id)
         )
     """)
@@ -198,8 +199,7 @@ def init_db():
             is_late_clock INTEGER DEFAULT 0,
             is_transition INTEGER DEFAULT 0,
             expected_points REAL DEFAULT 0,
-            FOREIGN KEY (game_id) REFERENCES games(game_id),
-            UNIQUE (game_id, play_id)
+            FOREIGN KEY (game_id) REFERENCES games(game_id)
         )
     """)
 
@@ -258,6 +258,62 @@ def init_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_players_game ON players(game_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_games_date ON games(date)")
 
+    # Migration: recreate players table with composite PK if it has single PK
+    # This fixes the bug where a player in multiple games only gets stored once
+    try:
+        cursor.execute("PRAGMA table_info(players)")
+        cols = {r[1]: r for r in cursor.fetchall()}
+        # If player_id is the sole PK (old schema), rebuild the table
+        if cols and all(r[5] <= 1 for r in cols.values()):  # pk column ≤ 1
+            cursor.execute("ALTER TABLE players RENAME TO players_old")
+            cursor.execute("""
+                CREATE TABLE players (
+                    player_id TEXT NOT NULL,
+                    game_id TEXT NOT NULL,
+                    team_name TEXT NOT NULL,
+                    team_id TEXT NOT NULL,
+                    player_name TEXT NOT NULL,
+                    PRIMARY KEY (player_id, game_id),
+                    FOREIGN KEY (game_id) REFERENCES games(game_id)
+                )
+            """)
+            cursor.execute("""
+                INSERT OR IGNORE INTO players
+                SELECT player_id, game_id, team_name, team_id, player_name
+                FROM players_old
+            """)
+            cursor.execute("DROP TABLE players_old")
+            logger.info("Migrated players table to composite (player_id, game_id) PK")
+    except Exception as e:
+        pass  # Already migrated or other error — safe to continue
+
+    # Fix shots unique index — old version lacked WHERE play_id IS NOT NULL,
+    # causing NULL play_ids (live shots) to collide on the constraint.
+    try:
+        cursor.execute("DROP INDEX IF EXISTS idx_shots_unique")
+        cursor.execute("DROP INDEX IF EXISTS idx_shots_unique_play")
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_shots_unique_play "
+            "ON shots(game_id, play_id) WHERE play_id IS NOT NULL"
+        )
+    except Exception:
+        pass
+
+    # Dedup plays then add unique index — order matters: dedup first
+    try:
+        cursor.execute("""
+            DELETE FROM plays WHERE id NOT IN (
+                SELECT MIN(id) FROM plays
+                GROUP BY game_id, half, time, player_id, play_text
+            )
+        """)
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_plays_unique "
+            "ON plays(game_id, half, time, player_id, play_text)"
+        )
+    except Exception:
+        pass
+
     # Migrations: add columns that may not exist in older DB versions
     _migrations = [
         "ALTER TABLE odds ADD COLUMN spread_a_team_name TEXT",
@@ -270,26 +326,6 @@ def init_db():
             cursor.execute(migration)
         except Exception:
             pass  # Column already exists — safe to ignore
-
-    # Add unique index on shots(game_id, play_id) to prevent duplicate inserts.
-    # Uses CREATE UNIQUE INDEX IF NOT EXISTS so it's safe to run on existing DBs.
-    # Dedup first: keep only the lowest id for each (game_id, play_id) pair.
-    try:
-        cursor.execute("""
-            DELETE FROM shots
-            WHERE play_id IS NOT NULL
-              AND id NOT IN (
-                SELECT MIN(id) FROM shots
-                WHERE play_id IS NOT NULL
-                GROUP BY game_id, play_id
-              )
-        """)
-        cursor.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_shots_unique_play "
-            "ON shots(game_id, play_id) WHERE play_id IS NOT NULL"
-        )
-    except Exception:
-        pass
 
     conn.commit()
 
@@ -408,7 +444,7 @@ def insert_players(game_id, players_data):
     ]
     conn = get_connection()
     conn.executemany(
-        "INSERT OR IGNORE INTO players (player_id, game_id, team_name, team_id, player_name) "
+        "INSERT OR REPLACE INTO players (player_id, game_id, team_name, team_id, player_name) "
         "VALUES (?, ?, ?, ?, ?)",
         rows
     )
