@@ -16,12 +16,17 @@ Improvements over v1:
 - Added H1 expected score calculation for second-half games
 - Thread-safe manual refresh with game_id targeting
 """
+import gzip
+import json
+import os
 import threading
 import time
 import random
 import logging
-from datetime import date
+from datetime import date, datetime
 from collections import defaultdict
+
+SNAPSHOTS_DIR = os.path.join(os.path.dirname(__file__), 'game_snapshots')
 
 from scrapers.ncaa_scraper import NCAAStatsScraper
 from scrapers.draftkings_scraper import DraftKingsScraper
@@ -56,6 +61,8 @@ class GameManager:
         self._game_ids = []
         self._last_pregame_odds_time = 0
         self._pstats_lookup = PlayerStatsLookup()
+
+        os.makedirs(SNAPSHOTS_DIR, exist_ok=True)
 
     # ---- Auto-refresh loop ----
 
@@ -243,6 +250,10 @@ class GameManager:
             f"Game {game_id}: {score_a}-{score_b}, "
             f"+{len(data['plays'])} plays, +{len(data['shots'])} shots"
         )
+
+        # Save a snapshot for final games so we have the data for off-season work
+        if is_final and data.get('plays'):
+            self._save_game_snapshot(game_id)
 
     def _refresh_dk_odds(self, live=True):
         """Fetch and store DraftKings odds (live or pregame)."""
@@ -453,6 +464,54 @@ class GameManager:
             'total_plays': len(plays),
             'total_shots': len(shots),
         }
+
+    def _save_game_snapshot(self, game_id):
+        """
+        Save a gzipped JSON snapshot of a completed game to game_snapshots/.
+
+        Captures plays, shots, players, and game metadata exactly as stored in
+        the DB — the same data that feeds the xP model during live games.
+        Safe to call multiple times; skips if the file already exists.
+
+        File format: game_snapshots/{game_id}_{date}.json.gz
+        To load in Python:
+            import gzip, json
+            with gzip.open('game_snapshots/XXXXX_2026-03-28.json.gz', 'rt') as f:
+                data = json.load(f)
+            plays = data['plays']   # list of dicts, same schema as DB plays table
+            shots = data['shots']   # list of dicts, same schema as DB shots table
+        """
+        filename = f"{game_id}_{date.today().isoformat()}.json.gz"
+        filepath = os.path.join(SNAPSHOTS_DIR, filename)
+
+        if os.path.exists(filepath):
+            return  # Already saved (e.g. app restarted, game still final)
+
+        try:
+            game    = get_or_create_game(game_id)
+            plays   = get_all_plays(game_id)
+            shots   = get_all_shots(game_id)
+            players = get_players_for_game(game_id)
+
+            snapshot = {
+                'game_id':      game_id,
+                'captured_at':  datetime.now().isoformat(),
+                'game_date':    date.today().isoformat(),
+                'game':         dict(game),
+                'plays':        plays,
+                'shots':        shots,
+                'players':      players,
+            }
+
+            with gzip.open(filepath, 'wt', encoding='utf-8') as f:
+                json.dump(snapshot, f)
+
+            logger.info(
+                f"Snapshot saved: {filename}  "
+                f"({len(plays)} plays, {len(shots)} shots)"
+            )
+        except Exception as e:
+            logger.error(f"Failed to save snapshot for {game_id}: {e}")
 
     def manual_refresh(self, game_id=None):
         """Trigger a manual refresh. If game_id specified, refresh only that game."""
