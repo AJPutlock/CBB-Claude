@@ -251,9 +251,8 @@ class GameManager:
             f"+{len(data['plays'])} plays, +{len(data['shots'])} shots"
         )
 
-        # Save a snapshot for final games so we have the data for off-season work
-        if is_final and data.get('plays'):
-            self._save_game_snapshot(game_id)
+        # Save a snapshot at every refresh so off-season replay has the full timeline
+        self._save_game_snapshot(game_id, gs, is_final)
 
     def _refresh_dk_odds(self, live=True):
         """Fetch and store DraftKings odds (live or pregame)."""
@@ -465,27 +464,35 @@ class GameManager:
             'total_shots': len(shots),
         }
 
-    def _save_game_snapshot(self, game_id):
+    def _save_game_snapshot(self, game_id, game_state, is_final):
         """
-        Save a gzipped JSON snapshot of a completed game to game_snapshots/.
+        Save a gzipped JSON snapshot after every refresh cycle.
 
-        Captures plays, shots, players, and game metadata exactly as stored in
-        the DB — the same data that feeds the xP model during live games.
-        Safe to call multiple times; skips if the file already exists.
+        Each file captures the cumulative state of the game at that moment —
+        all plays and shots recorded SO FAR, plus the current score/clock.
+        This lets you replay the game state at any ~5-minute interval over
+        the summer without needing live games.
 
-        File format: game_snapshots/{game_id}_{date}.json.gz
-        To load in Python:
+        File format: game_snapshots/{game_id}/{game_id}_HHMMSS.json.gz
+        Files are ordered chronologically by filename within each game folder.
+
+        To load a snapshot in Python:
             import gzip, json
-            with gzip.open('game_snapshots/XXXXX_2026-03-28.json.gz', 'rt') as f:
-                data = json.load(f)
-            plays = data['plays']   # list of dicts, same schema as DB plays table
-            shots = data['shots']   # list of dicts, same schema as DB shots table
+            with gzip.open(path, 'rt') as f:
+                snap = json.load(f)
+            # snap['half'], snap['clock'] tell you where in the game this is
+            shots = snap['shots']   # all shots up to this moment
+            plays = snap['plays']   # all plays up to this moment
         """
-        filename = f"{game_id}_{date.today().isoformat()}.json.gz"
-        filepath = os.path.join(SNAPSHOTS_DIR, filename)
+        # One subfolder per game keeps the directory tidy
+        game_dir = os.path.join(SNAPSHOTS_DIR, game_id)
+        os.makedirs(game_dir, exist_ok=True)
 
-        if os.path.exists(filepath):
-            return  # Already saved (e.g. app restarted, game still final)
+        ts = datetime.now().strftime('%H%M%S')
+        status = 'final' if is_final else 'live'
+        half   = game_state.get('half', 0)
+        filename = f"{game_id}_{status}_H{half}_{ts}.json.gz"
+        filepath = os.path.join(game_dir, filename)
 
         try:
             game    = get_or_create_game(game_id)
@@ -493,21 +500,29 @@ class GameManager:
             shots   = get_all_shots(game_id)
             players = get_players_for_game(game_id)
 
+            if not plays and not shots:
+                return  # Nothing to save yet (game not started)
+
             snapshot = {
-                'game_id':      game_id,
-                'captured_at':  datetime.now().isoformat(),
-                'game_date':    date.today().isoformat(),
-                'game':         dict(game),
-                'plays':        plays,
-                'shots':        shots,
-                'players':      players,
+                'game_id':     game_id,
+                'captured_at': datetime.now().isoformat(),
+                'game_date':   date.today().isoformat(),
+                'half':        half,
+                'clock':       game_state.get('game_clock', ''),
+                'score_a':     game_state.get('team_a_score'),
+                'score_b':     game_state.get('team_b_score'),
+                'is_final':    is_final,
+                'game':        dict(game),
+                'plays':       plays,
+                'shots':       shots,
+                'players':     players,
             }
 
             with gzip.open(filepath, 'wt', encoding='utf-8') as f:
                 json.dump(snapshot, f)
 
             logger.info(
-                f"Snapshot saved: {filename}  "
+                f"Snapshot: {filename}  "
                 f"({len(plays)} plays, {len(shots)} shots)"
             )
         except Exception as e:
