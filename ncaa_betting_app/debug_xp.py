@@ -238,16 +238,27 @@ def main():
         # Flag if final_type differs from pbp_type (means coord/description changed it)
         type_flag = '*' if final_type != pbp_type else ' '
 
-        # Only show player/coord deltas for shot types where adjustment applies
-        # AND player stats were found — suppress all deltas if no player stats
-        applies    = final_type in ('three', 'ft')
         has_coords = x_pct is not None
         has_stats  = p_stats is not None
 
-        plyr_str   = f"{xp_player:.3f}" if (has_stats and applies) else "   —"
-        coord_str  = f"{xp_coord:.3f}"  if (has_stats and applies and has_coords) else "   —"
-        cdelta_str = f"{coord_delta:+.3f}" if (has_stats and applies and has_coords) else "   —"
-        tdelta_str = f"{total_delta:+.3f}" if (has_stats and applies) else "   —"
+        # FT: show player's FT% as player base, no coord col (no location for FTs)
+        # Dunk: fixed value regardless of shooter or location — nothing to break down
+        # All other types: show player base, coord adj, and both deltas
+        if final_type == 'ft':
+            plyr_str   = f"{xp_player:.3f}" if has_stats else "   —"
+            coord_str  = "   —"
+            cdelta_str = "   —"
+            tdelta_str = f"{total_delta:+.3f}" if has_stats else "   —"
+        elif final_type == 'dunk':
+            plyr_str   = "   —"
+            coord_str  = "   —"
+            cdelta_str = "   —"
+            tdelta_str = "   —"
+        else:
+            plyr_str   = f"{xp_player:.3f}" if has_stats else "   —"
+            coord_str  = f"{xp_coord:.3f}"  if has_coords else "   —"
+            cdelta_str = f"{coord_delta:+.3f}" if (has_stats and has_coords) else "   —"
+            tdelta_str = f"{total_delta:+.3f}" if (has_stats or has_coords) else "   —"
 
         print(f"{shot_num:>4}  {team_str:<18}  {half:>4}  {time_norm:>6}  "
               f"{pbp_type:<12}  {coord_type_str:<12}  {final_type+type_flag:<12}  "
